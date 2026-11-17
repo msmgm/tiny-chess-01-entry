@@ -38,145 +38,131 @@ def name_sq(n):
     return (8 - int(n[1])) * 16 + (ord(n[0]) - 97)
 
 class Board:
-    def __init__(self, f="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"):
-        self.b = [0] * 128
+    def __init__(s, f="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"):
+        s.b = [0] * 128
         p = f.split()
         for r, row in enumerate(p[0].split('/')):
             c = 0
             for ch in row:
                 if ch.isdigit(): c += int(ch)
-                else: self.b[(r << 4) + c] = PIECES[ch]; c += 1
-        self.turn = 0 if p[1] == 'w' else 8
-        self.castling = 0
-        if len(p) > 2 and p[2] != '-':
-            for ch, val in (('K', 1), ('Q', 2), ('k', 4), ('q', 8)):
-                if ch in p[2]: self.castling |= val
-        self.ep = name_sq(p[3]) if len(p) > 3 and p[3] != '-' else -1
-        self.halfmove = int(p[4]) if len(p) > 4 else 0
-        self.fullmove = int(p[5]) if len(p) > 5 else 1
-        self.hash = self.compute_zobrist()
+                else: s.b[(r << 4) + c] = PIECES[ch]; c += 1
+        s.turn = 0 if p[1] == 'w' else 8
+        s.castling = sum(val for ch, val in (('K', 1), ('Q', 2), ('k', 4), ('q', 8)) if len(p) > 2 and ch in p[2])
+        s.ep = name_sq(p[3]) if len(p) > 3 and p[3] != '-' else -1
+        s.halfmove = int(p[4]) if len(p) > 4 else 0
+        s.fullmove = int(p[5]) if len(p) > 5 else 1
+        s.hash = s.compute_zobrist()
 
-    def compute_zobrist(self):
-        h = 0
-        for sq in range(128):
-            if not (sq & 0x88) and (p := self.b[sq]): h ^= Z_PIECE[p][sq]
-        if self.turn == 8: h ^= Z_TURN
-        h ^= Z_CASTLING[self.castling]
-        if self.ep != -1: h ^= Z_EP[self.ep]
-        return h
+    def compute_zobrist(s):
+        h = sum(Z_PIECE[p][q] for q in range(128) if not (q & 0x88) and (p := s.b[q]))
+        return h ^ (Z_TURN if s.turn == 8 else 0) ^ Z_CASTLING[s.castling] ^ (Z_EP[s.ep] if s.ep != -1 else 0)
 
-    def attacked(self, sq, by_col):
-        pc = 1 | by_col
-        for d in (17, 15) if by_col == 0 else (-17, -15):
-            if not ((t := sq + d) & 0x88) and self.b[t] == pc: return True
-        nc = 2 | by_col
-        for d in (-18, -33, -31, -14, 14, 31, 33, 18):
-            if not ((t := sq + d) & 0x88) and self.b[t] == nc: return True
-        kc = 6 | by_col
-        for d in (-17, -16, -15, -1, 1, 15, 16, 17):
-            if not ((t := sq + d) & 0x88) and self.b[t] == kc: return True
-        bq = (3 | by_col, 5 | by_col)
+    def attacked(s, sq, c):
+        if any(not ((t := sq + d) & 0x88) and s.b[t] == 1 | c for d in ((17, 15) if not c else (-17, -15))): return True
+        if any(not ((t := sq + d) & 0x88) and s.b[t] == 2 | c for d in (-18, -33, -31, -14, 14, 31, 33, 18)): return True
+        if any(not ((t := sq + d) & 0x88) and s.b[t] == 6 | c for d in (-17, -16, -15, -1, 1, 15, 16, 17)): return True
+        bq = (3 | c, 5 | c)
         for d in (-17, -15, 15, 17):
             t = sq + d
             while not (t & 0x88):
-                if (p := self.b[t]):
+                if (p := s.b[t]):
                     if p in bq: return True
                     break
                 t += d
-        rq = (4 | by_col, 5 | by_col)
+        rq = (4 | c, 5 | c)
         for d in (-1, -16, 16, 1):
             t = sq + d
             while not (t & 0x88):
-                if (p := self.b[t]):
+                if (p := s.b[t]):
                     if p in rq: return True
                     break
                 t += d
         return False
 
-    def find_king(self, col):
-        k = 6 | col
+    def find_king(s, c):
+        k = 6 | c
         for i in range(128):
-            if not (i & 0x88) and self.b[i] == k: return i
+            if not (i & 0x88) and s.b[i] == k: return i
         return -1
 
-    def generate_moves(self):
+    def generate_moves(s):
         mvs = []
-        us = self.turn
+        us = s.turn
         them = 8 - us
         fwd = -16 if us == 0 else 16
         sr = 6 if us == 0 else 1
         pr = 0 if us == 0 else 7
         cd = (-17, -15) if us == 0 else (15, 17)
         for sq in range(128):
-            if sq & 0x88 or not (p := self.b[sq]) or (p & 8) != us: continue
+            if sq & 0x88 or not (p := s.b[sq]) or (p & 8) != us: continue
             pt = p & 7
             if pt == 1:
                 t = sq + fwd
-                if not (t & 0x88) and not self.b[t]:
+                if not (t & 0x88) and not s.b[t]:
                     if (t >> 4) == pr:
                         for promo in (5, 4, 3, 2): mvs.append((sq, t, promo))
                     else:
                         mvs.append((sq, t, 0))
                         t2 = t + fwd
-                        if (sq >> 4) == sr and not (t2 & 0x88) and not self.b[t2]: mvs.append((sq, t2, 0))
+                        if (sq >> 4) == sr and not (t2 & 0x88) and not s.b[t2]: mvs.append((sq, t2, 0))
                 for d in cd:
                     t = sq + d
-                    if not (t & 0x88) and (((tgt := self.b[t]) and (tgt & 8) == them) or t == self.ep):
+                    if not (t & 0x88) and (((tgt := s.b[t]) and (tgt & 8) == them) or t == s.ep):
                         if (t >> 4) == pr:
                             for promo in (5, 4, 3, 2): mvs.append((sq, t, promo))
                         else:
                             mvs.append((sq, t, 0))
             elif pt in (2, 6):
                 for d in ((-18, -33, -31, -14, 14, 31, 33, 18) if pt == 2 else (-17, -16, -15, -1, 1, 15, 16, 17)):
-                    if not ((t := sq + d) & 0x88) and (not (tgt := self.b[t]) or (tgt & 8) == them):
+                    if not ((t := sq + d) & 0x88) and (not (tgt := s.b[t]) or (tgt & 8) == them):
                         mvs.append((sq, t, 0))
                 if pt == 6:
                     if us == 0:
-                        if (self.castling & 1) and not self.b[117] and not self.b[118] and not self.attacked(116, 8) and not self.attacked(117, 8) and not self.attacked(118, 8): mvs.append((116, 118, 0))
-                        if (self.castling & 2) and not self.b[115] and not self.b[114] and not self.b[113] and not self.attacked(116, 8) and not self.attacked(115, 8) and not self.attacked(114, 8): mvs.append((116, 114, 0))
+                        if (s.castling & 1) and not s.b[117] and not s.b[118] and not s.attacked(116, 8) and not s.attacked(117, 8) and not s.attacked(118, 8): mvs.append((116, 118, 0))
+                        if (s.castling & 2) and not s.b[115] and not s.b[114] and not s.b[113] and not s.attacked(116, 8) and not s.attacked(115, 8) and not s.attacked(114, 8): mvs.append((116, 114, 0))
                     else:
-                        if (self.castling & 4) and not self.b[5] and not self.b[6] and not self.attacked(4, 0) and not self.attacked(5, 0) and not self.attacked(6, 0): mvs.append((4, 6, 0))
-                        if (self.castling & 8) and not self.b[3] and not self.b[2] and not self.b[1] and not self.attacked(4, 0) and not self.attacked(3, 0) and not self.attacked(2, 0): mvs.append((4, 2, 0))
+                        if (s.castling & 4) and not s.b[5] and not s.b[6] and not s.attacked(4, 0) and not s.attacked(5, 0) and not s.attacked(6, 0): mvs.append((4, 6, 0))
+                        if (s.castling & 8) and not s.b[3] and not s.b[2] and not s.b[1] and not s.attacked(4, 0) and not s.attacked(3, 0) and not s.attacked(2, 0): mvs.append((4, 2, 0))
             else:
                 for d in (((-17, -15, 15, 17) if pt in (3, 5) else ()) + ((-1, -16, 16, 1) if pt in (4, 5) else ())):
                     t = sq + d
                     while not (t & 0x88):
-                        if not (tgt := self.b[t]): mvs.append((sq, t, 0))
+                        if not (tgt := s.b[t]): mvs.append((sq, t, 0))
                         else:
                             if (tgt & 8) == them: mvs.append((sq, t, 0))
                             break
                         t += d
         return mvs
 
-    def make_move(self, m):
+    def make_move(s, m):
         fr, to, promo = m
-        p = self.b[fr]
-        tgt = self.b[to]
-        us = self.turn
+        p = s.b[fr]
+        tgt = s.b[to]
+        us = s.turn
         them = 8 - us
-        oh = self.hash
-        undo = (p, tgt, self.castling, self.ep, self.halfmove, fr, to, promo, oh)
-        self.hash ^= Z_PIECE[p][fr]
-        if tgt: self.hash ^= Z_PIECE[tgt][to]
-        if (p & 7) == 1 and to == self.ep:
+        oh = s.hash
+        undo = (p, tgt, s.castling, s.ep, s.halfmove, fr, to, promo, oh)
+        s.hash ^= Z_PIECE[p][fr]
+        if tgt: s.hash ^= Z_PIECE[tgt][to]
+        if (p & 7) == 1 and to == s.ep:
             es = to + (16 if us == 0 else -16)
-            tgt = self.b[es]
-            self.b[es] = 0
-            self.hash ^= Z_PIECE[9 | them if us == 0 else 1 | them][es]
-        oc = self.castling
+            tgt = s.b[es]
+            s.b[es] = 0
+            s.hash ^= Z_PIECE[9 | them if us == 0 else 1 | them][es]
+        oc = s.castling
         if (p & 7) == 6:
             if fr == 116 and to == 118:
-                self.b[117], self.b[119] = self.b[119], 0
-                self.hash ^= Z_PIECE[4][119] ^ Z_PIECE[4][117]
+                s.b[117], s.b[119] = s.b[119], 0
+                s.hash ^= Z_PIECE[4][119] ^ Z_PIECE[4][117]
             elif fr == 116 and to == 114:
-                self.b[115], self.b[112] = self.b[112], 0
-                self.hash ^= Z_PIECE[4][112] ^ Z_PIECE[4][115]
+                s.b[115], s.b[112] = s.b[112], 0
+                s.hash ^= Z_PIECE[4][112] ^ Z_PIECE[4][115]
             elif fr == 4 and to == 6:
-                self.b[5], self.b[7] = self.b[7], 0
-                self.hash ^= Z_PIECE[12][7] ^ Z_PIECE[12][5]
+                s.b[5], s.b[7] = s.b[7], 0
+                s.hash ^= Z_PIECE[12][7] ^ Z_PIECE[12][5]
             elif fr == 4 and to == 2:
-                self.b[3], self.b[0] = self.b[0], 0
-                self.hash ^= Z_PIECE[12][0] ^ Z_PIECE[12][3]
+                s.b[3], s.b[0] = s.b[0], 0
+                s.hash ^= Z_PIECE[12][0] ^ Z_PIECE[12][3]
         cm = 15
         if fr == 116 or to == 116: cm &= ~3
         if fr == 119 or to == 119: cm &= ~1
@@ -184,51 +170,51 @@ class Board:
         if fr == 4 or to == 4: cm &= ~12
         if fr == 7 or to == 7: cm &= ~4
         if fr == 0 or to == 0: cm &= ~8
-        self.castling &= cm
-        self.hash ^= Z_CASTLING[oc] ^ Z_CASTLING[self.castling]
-        if self.ep != -1: self.hash ^= Z_EP[self.ep]
-        self.ep = -1
+        s.castling &= cm
+        s.hash ^= Z_CASTLING[oc] ^ Z_CASTLING[s.castling]
+        if s.ep != -1: s.hash ^= Z_EP[s.ep]
+        s.ep = -1
         if (p & 7) == 1 and abs(to - fr) == 32:
-            self.ep = fr + (-16 if us == 0 else 16)
-            self.hash ^= Z_EP[self.ep]
+            s.ep = fr + (-16 if us == 0 else 16)
+            s.hash ^= Z_EP[s.ep]
         np_ = (us | promo) if promo else p
-        self.b[to] = np_
-        self.b[fr] = 0
-        self.hash ^= Z_PIECE[np_][to]
-        self.turn = them
-        self.hash ^= Z_TURN
-        self.halfmove = 0 if (p & 7) == 1 or tgt else self.halfmove + 1
-        if us == 8: self.fullmove += 1
+        s.b[to] = np_
+        s.b[fr] = 0
+        s.hash ^= Z_PIECE[np_][to]
+        s.turn = them
+        s.hash ^= Z_TURN
+        s.halfmove = 0 if (p & 7) == 1 or tgt else s.halfmove + 1
+        if us == 8: s.fullmove += 1
         return undo
 
-    def unmake_move(self, m, undo):
+    def unmake_move(s, m, undo):
         p, tgt, castling, ep, halfmove, fr, to, promo, oh = undo
-        self.hash = oh
-        us = 8 - self.turn
-        self.turn = us
-        self.castling = castling
-        self.ep = ep
-        self.halfmove = halfmove
-        if us == 8: self.fullmove -= 1
-        self.b[fr] = p
-        self.b[to] = 0
+        s.hash = oh
+        us = 8 - s.turn
+        s.turn = us
+        s.castling = castling
+        s.ep = ep
+        s.halfmove = halfmove
+        if us == 8: s.fullmove -= 1
+        s.b[fr] = p
+        s.b[to] = 0
         if (p & 7) == 1 and to == ep:
             es = to + (16 if us == 0 else -16)
-            self.b[es] = 9 if us == 0 else 1
-        else: self.b[to] = tgt
+            s.b[es] = 9 if us == 0 else 1
+        else: s.b[to] = tgt
         if (p & 7) == 6:
-            if fr == 116 and to == 118: self.b[119], self.b[117] = self.b[117], 0
-            elif fr == 116 and to == 114: self.b[112], self.b[115] = self.b[115], 0
-            elif fr == 4 and to == 6: self.b[7], self.b[5] = self.b[5], 0
-            elif fr == 4 and to == 2: self.b[0], self.b[3] = self.b[3], 0
+            if fr == 116 and to == 118: s.b[119], s.b[117] = s.b[117], 0
+            elif fr == 116 and to == 114: s.b[112], s.b[115] = s.b[115], 0
+            elif fr == 4 and to == 6: s.b[7], s.b[5] = s.b[5], 0
+            elif fr == 4 and to == 2: s.b[0], s.b[3] = s.b[3], 0
 
-    def legal_moves(self):
+    def legal_moves(s):
         l = []
-        us = self.turn
-        for m in self.generate_moves():
-            u = self.make_move(m)
-            if (ks := self.find_king(us)) != -1 and not self.attacked(ks, 8 - us): l.append(m)
-            self.unmake_move(m, u)
+        us = s.turn
+        for m in s.generate_moves():
+            u = s.make_move(m)
+            if (ks := s.find_king(us)) != -1 and not s.attacked(ks, 8 - us): l.append(m)
+            s.unmake_move(m, u)
         return l
 
 def to_uci(m):
