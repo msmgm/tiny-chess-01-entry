@@ -145,4 +145,117 @@ def perft(d):
         n+=perft(d-1)
         un()
     return n
-# RW
+import json, os, time, urllib.request
+T = b'\x80\x80\x80\x80\x80\x80\x80\x80\xb2\xb2\xb2\xb2\xb2\xb2\xb2\xb2\x8a\x8a\x94\x9e\x9e\x94\x8a\x8a\x85\x85\x8a\x99\x99\x8a\x85\x85\x80\x80\x80\x94\x94\x80\x80\x80\x85{v\x80\x80v{\x85\x85\x8a\x8all\x8a\x8a\x85\x80\x80\x80\x80\x80\x80\x80\x80NXbbbbXNXl\x80\x80\x80\x80lXb\x80\x8a\x8f\x8f\x8a\x80bb\x80\x8f\x94\x94\x8f\x80bb\x80\x8f\x94\x94\x8f\x80bb\x80\x8a\x8f\x8f\x8a\x80bXl\x80\x85\x85\x80lXNXbbbbXNlvvvvvvlv\x80\x80\x80\x80\x80\x80vv\x80\x85\x8a\x8a\x85\x80vv\x85\x85\x8a\x8a\x85\x85vv\x80\x8a\x8a\x8a\x8a\x80vv\x8a\x8a\x8a\x8a\x8a\x8avv\x85\x80\x80\x80\x80\x85vlvvvvvvl\x80\x80\x80\x80\x80\x80\x80\x80\x85\x8a\x8a\x8a\x8a\x8a\x8a\x85{\x80\x80\x80\x80\x80\x80{{\x80\x80\x80\x80\x80\x80{{\x80\x80\x80\x80\x80\x80{{\x80\x80\x80\x80\x80\x80{{\x80\x80\x80\x80\x80\x80{\x80\x80\x80\x85\x85\x80\x80\x80lvv{{vvlv\x80\x80\x80\x80\x80\x80vv\x80\x85\x85\x85\x85\x80v{\x80\x85\x85\x85\x85\x80{\x80\x80\x85\x85\x85\x85\x80{v\x85\x85\x85\x85\x85\x80vv\x80\x85\x80\x80\x80\x80vlvv{{vvlbXXNNXXbbXXNNXXbbXXNNXXbbXXNNXXblbbXXbblvllllllv\x94\x94\x80\x80\x80\x80\x94\x94\x94\x9e\x8a\x80\x80\x8a\x9e\x94\x80\x80\x80\x80\x80\x80\x80\x80\xc5\xc5\xc5\xc5\xc5\xc5\xc5\xc5\xae\xae\xae\xae\xae\xae\xae\xae\x97\x97\x97\x97\x97\x97\x97\x97\x80\x80\x80\x80\x80\x80\x80\x80iiiiiiiiRRRRRRRR\x80\x80\x80\x80\x80\x80\x80\x80v{{{{{{v{\x80\x80\x80\x80\x80\x80{{\x80\x85\x85\x85\x85\x80{{\x80\x85\x8a\x8a\x85\x80{{\x80\x85\x8a\x8a\x85\x80{{\x80\x85\x85\x85\x85\x80{{\x80\x80\x80\x80\x80\x80{v{{{{{{vv{{{{{{v{\x80\x80\x80\x80\x80\x80{{\x80\x85\x85\x85\x85\x80{{\x80\x85\x8a\x8a\x85\x80{{\x80\x85\x8a\x8a\x85\x80{{\x80\x85\x85\x85\x85\x80{{\x80\x80\x80\x80\x80\x80{v{{{{{{v\x80\x80\x80\x80\x80\x80\x80\x80\x82\x84\x84\x84\x84\x84\x84\x82~\x80\x80\x80\x80\x80\x80~~\x80\x80\x80\x80\x80\x80~~\x80\x80\x80\x80\x80\x80~~\x80\x80\x80\x80\x80\x80~~\x80\x80\x80\x80\x80\x80~\x80\x80\x80\x82\x82\x80\x80\x80v{{~~{{v{\x80\x80\x80\x80\x80\x80{{\x80\x83\x83\x83\x83\x80{~\x80\x83\x83\x83\x83\x80~\x80\x80\x83\x83\x83\x83\x80~{\x83\x83\x83\x83\x83\x80{{\x80\x83\x80\x80\x80\x80{v{{~~{{vNXbllbXNblv\x80\x80vlbbv\x94\x9e\x9e\x94vbbv\x9e\xa8\xa8\x9evbbv\x9e\xa8\xa8\x9evbbv\x94\x9e\x9e\x94vbblv\x80\x80vlbNXbllbXN'
+MAT=(0,100,320,330,500,900,0)
+PHW=(0,0,1,1,2,4,0)
+def eval():
+    w1=w2=b1=b2=ph=0
+    for sq in range(128):
+        if sq&0x88 or not(p:=b[sq]): continue
+        pt=p&7;us=p&8;r=sq>>4;c=sq&7
+        idx=(r<<3)+c if us==0 else ((7-r)<<3)+c
+        ph+=PHW[pt];o=(pt-1)<<6
+        mg=T[o+idx]-128;eg=T[384+o+idx]-128
+        if us==0: w1+=MAT[pt]+mg;w2+=MAT[pt]+eg
+        else: b1+=MAT[pt]+mg;b2+=MAT[pt]+eg
+    ph=24 if ph>24 else ph
+    w=(w1*ph+w2*(24-ph))//24;x=(b1*ph+b2*(24-ph))//24
+    return (w-x) if t==0 else (x-w)
+
+def move_score(m):
+    fr=m&127;to=(m>>7)&127;pr=m>>14
+    p=b[fr];pt=p&7;tgt=b[to]
+    vic=(tgt&7) if tgt else (1 if pt==1 and (fr&7)!=(to&7) else 0)
+    return (20000+10*MAT[vic]-MAT[pt]//10) if vic else (10000+1000*pr if pr else 0)
+
+class SearchStop(Exception): pass
+NODES=0;START_TIME=0.0
+
+def search(depth,alpha,beta,ply):
+    global NODES
+    NODES+=1
+    if (NODES&2047)==0 and (NODES>=100000 or time.monotonic()-START_TIME>5.0): raise SearchStop()
+    if h>=100: return 0
+    if depth<=0: return eval()
+    us=t;them=8-us;in_check=atk(fk(us),them)
+    if depth>=3 and not in_check and abs(beta)<90000:
+        if any((p:=b[sq]) and (p&8)==us and (p&7) not in (1,6) for sq in range(128) if not(sq&0x88)):
+            ot,oe,oh=t,e,h;globals()['t']=them;globals()['e']=-1;globals()['h']=oh+1
+            val=-search(depth-3,-beta,-beta+1,ply+1)
+            globals()['t']=ot;globals()['e']=oe;globals()['h']=oh
+            if val>=beta: return beta
+    mvs=legal()
+    if not mvs: return (-100000+ply) if in_check else 0
+    mvs.sort(key=move_score,reverse=True)
+    bv=-200000;fm=True;lc=0
+    for m in mvs:
+        fr=m&127;to=(m>>7)&127;pr=m>>14
+        p=b[fr];tgt=b[to];ic=tgt!=0 or ((p&7)==1 and to==e)
+        mk(m);lc+=1;ds=depth-1
+        if not fm and depth>=3 and lc>=4 and not in_check and not ic and not pr:
+            ds=depth-2
+            val=-search(ds,-alpha-1,-alpha,ply+1)
+            if val>alpha: ds=depth-1
+            else:
+                un()
+                if val>bv: bv=val
+                if val>alpha: alpha=val
+                continue
+        if fm:
+            val=-search(ds,-beta,-alpha,ply+1)
+            fm=False
+        else:
+            val=-search(ds,-alpha-1,-alpha,ply+1)
+            if val>alpha and val<beta:
+                val=-search(depth-1,-beta,-alpha,ply+1)
+        un()
+        if val>bv: bv=val
+        if val>alpha:
+            alpha=val
+            if alpha>=beta: break
+    return bv
+
+def choose(fen,lm):
+    global NODES,START_TIME;setup(fen);legals=legal()
+    if not legals: return lm[0] if lm else None
+    if len(legals)==1: return to_uci(legals[0])
+    ul=[to_uci(m) for m in legals];vl=[m for m in lm if m in ul] or lm
+    NODES=0;START_TIME=time.monotonic();bm=legals[0];depth=1
+    while NODES<100000 and time.monotonic()-START_TIME<5.0:
+        alpha,beta=-200000,200000;mvs=legals[:];mvs.sort(key=move_score,reverse=True)
+        lbm=mvs[0];lbs=-200000;comp=True;fm=True
+        try:
+            for m in mvs:
+                mk(m);ds=depth-1
+                if fm:
+                    val=-search(ds,-beta,-alpha,1);fm=False
+                else:
+                    val=-search(ds,-alpha-1,-alpha,1)
+                    if val>alpha and val<beta: val=-search(depth-1,-beta,-alpha,1)
+                un()
+                if val>lbs: lbs,lbm=val,m
+                if val>alpha: alpha=val
+        except SearchStop: comp=False
+        if not comp or NODES>=100000: break
+        bm=lbm
+        if abs(lbs)>90000: break
+        depth+=1
+    cu=to_uci(bm)
+    return cu if cu in lm else (vl[0] if vl else (lm[0] if lm else None))
+
+def post(path,body):
+    u=os.environ.get("MAKEFUN_ENV_URL") or sys.exit("MAKEFUN_ENV_URL is not set")
+    req=urllib.request.Request(u+path,data=json.dumps(body).encode(),headers={"content-type":"application/json"})
+    try:
+        with urllib.request.urlopen(req) as res: return json.load(res)
+    except urllib.error.HTTPError as e: sys.exit(f"{path}: HTTP {e.code} {e.read().decode(errors='replace')}")
+
+if __name__=="__main__":
+    while True:
+        g=post("/game",{})
+        if g["status"]=="done": break
+        while g["status"]=="your_move":
+            g=post("/move",{"game":g["game"],"move":choose(g["fen"],g["legal_moves"])})
+        print(f"game {g['game']}: {g['outcome']} by {g['reason']}",file=sys.stderr)
+    print(f"done: {g.get('wins')} won, {g.get('draws')} drawn, {g.get('losses')} lost",file=sys.stderr)
