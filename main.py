@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -290,32 +291,209 @@ def post(path, body):
     except urllib.error.HTTPError as e:
         sys.exit(f"{path}: HTTP {e.code} {e.read().decode(errors='replace')}")
 
+MAT = [0, 100, 320, 330, 500, 900, 0]
+
+PST_P = (
+     0,  0,  0,  0,  0,  0,  0,  0,
+    50, 50, 50, 50, 50, 50, 50, 50,
+    10, 10, 20, 30, 30, 20, 10, 10,
+     5,  5, 10, 25, 25, 10,  5,  5,
+     0,  0,  0, 20, 20,  0,  0,  0,
+     5, -5,-10,  0,  0,-10, -5,  5,
+     5, 10, 10,-20,-20, 10, 10,  5,
+     0,  0,  0,  0,  0,  0,  0,  0
+)
+PST_N = (
+    -50,-40,-30,-30,-30,-30,-40,-50,
+    -40,-20,  0,  0,  0,  0,-20,-40,
+    -30,  0, 10, 15, 15, 10,  0,-30,
+    -30,  0, 15, 20, 20, 15,  0,-30,
+    -30,  0, 15, 20, 20, 15,  0,-30,
+    -30,  0, 10, 15, 15, 10,  0,-30,
+    -40,-20,  0,  5,  5,  0,-20,-40,
+    -50,-40,-30,-30,-30,-30,-40,-50,
+)
+PST_B = (
+    -20,-10,-10,-10,-10,-10,-10,-20,
+    -10,  0,  0,  0,  0,  0,  0,-10,
+    -10,  0,  5, 10, 10,  5,  0,-10,
+    -10,  5,  5, 10, 10,  5,  5,-10,
+    -10,  0, 10, 10, 10, 10,  0,-10,
+    -10, 10, 10, 10, 10, 10, 10,-10,
+    -10,  5,  0,  0,  0,  0,  5,-10,
+    -20,-10,-10,-10,-10,-10,-10,-20,
+)
+PST_R = (
+      0,  0,  0,  0,  0,  0,  0,  0,
+      5, 10, 10, 10, 10, 10, 10,  5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+      0,  0,  0,  5,  5,  0,  0,  0,
+)
+PST_Q = (
+    -20,-10,-10, -5, -5,-10,-10,-20,
+    -10,  0,  0,  0,  0,  0,  0,-10,
+    -10,  0,  5,  5,  5,  5,  0,-10,
+     -5,  0,  5,  5,  5,  5,  0, -5,
+      0,  0,  5,  5,  5,  5,  0, -5,
+    -10,  5,  5,  5,  5,  5,  0,-10,
+    -10,  0,  5,  0,  0,  0,  0,-10,
+    -20,-10,-10, -5, -5,-10,-10,-20,
+)
+PST_K = (
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -20,-30,-30,-40,-40,-30,-30,-20,
+    -10,-20,-20,-20,-20,-20,-20,-10,
+     20, 20,  0,  0,  0,  0, 20, 20,
+     20, 30, 10,  0,  0, 10, 30, 20,
+)
+
+PSTS = ((), PST_P, PST_N, PST_B, PST_R, PST_Q, PST_K)
+
+def eval_board(board):
+    w = 0
+    b = 0
+    for r in range(8):
+        base = r << 4
+        for c in range(8):
+            p = board.b[base + c]
+            if not p: continue
+            pt = p & 7
+            us = p & 8
+            idx = (r << 3) + c if us == 0 else ((7 - r) << 3) + c
+            val = MAT[pt] + PSTS[pt][idx]
+            if us == 0: w += val
+            else: b += val
+    return (w - b) if board.turn == 0 else (b - w)
+
+def move_score(board, m):
+    fr, to, promo = m
+    p = board.b[fr]
+    pt = p & 7
+    target = board.b[to]
+    victim = target & 7 if target else (1 if pt == 1 and (fr & 7) != (to & 7) else 0)
+    score = 0
+    if victim:
+        score = 10000 + 10 * MAT[victim] - MAT[pt] // 10
+    elif promo:
+        score = 5000 + MAT[promo]
+    return score
+
+NODES = 0
+START_TIME = 0.0
+
+class SearchStop(Exception): pass
+
+def search(board, depth, alpha, beta, ply):
+    global NODES
+    NODES += 1
+    if (NODES & 2047) == 0:
+        if NODES >= 600000 or (time.monotonic() - START_TIME > 9.0):
+            raise SearchStop()
+
+    if depth <= 0:
+        return eval_board(board)
+    if board.halfmove >= 100:
+        return 0
+
+    moves = board.legal_moves()
+    if not moves:
+        us = board.turn
+        king_sq = board.find_king(us)
+        if king_sq != -1 and board.attacked(king_sq, 8 - us):
+            return -100000 + ply
+        return 0
+
+    moves.sort(key=lambda m: move_score(board, m), reverse=True)
+
+    best_val = -200000
+    for m in moves:
+        undo = board.make_move(m)
+        val = -search(board, depth - 1, -beta, -alpha, ply + 1)
+        board.unmake_move(m, undo)
+        if val > best_val:
+            best_val = val
+        if val > alpha:
+            alpha = val
+        if alpha >= beta:
+            break
+    return best_val
+
 def choose(fen, legal):
+    global NODES, START_TIME
     board = Board(fen)
     legals = board.legal_moves()
+    if not legals:
+        return legal[0] if legal else None
+    if len(legals) == 1:
+        return to_uci(legals[0])
+
     uci_legals = [to_uci(m) for m in legals]
-    board_dict = {}
-    for i, row in enumerate(fen.split()[0].split("/")):
-        file = 0
-        for c in row:
-            if c.isdigit(): file += int(c)
-            else:
-                board_dict["abcdefgh"[file] + str(8 - i)] = c
-                file += 1
-
-    def rank(move):
-        mover = board_dict[move[:2]].lower()
-        victim = board_dict.get(move[2:4])
-        if victim is None and mover == "p" and move[0] != move[2]:
-            victim = "p"
-        taken = VALUE[victim.lower()] if victim else 0
-        promo = VALUE[move[4]] if len(move) == 5 else 0
-        return (-taken, -promo, VALUE[mover], move)
-
     valid_legal = [m for m in legal if m in uci_legals]
     if not valid_legal:
         valid_legal = legal
-    return min(valid_legal, key=rank) if valid_legal else legal[0]
+
+    NODES = 0
+    START_TIME = time.monotonic()
+    node_budget = 600000
+    time_limit = 9.0
+
+    best_move = legals[0]
+    best_score = -200000
+
+    depth = 1
+    while NODES < node_budget:
+        if time.monotonic() - START_TIME > time_limit:
+            break
+
+        alpha = -200000
+        beta = 200000
+
+        scored_moves = [(m, move_score(board, m)) for m in legals]
+        scored_moves.sort(key=lambda x: x[1], reverse=True)
+        ordered_moves = [m for m, s in scored_moves]
+
+        local_best_move = ordered_moves[0]
+        local_best_score = -200000
+
+        iteration_completed = True
+        try:
+            for m in ordered_moves:
+                undo = board.make_move(m)
+                val = -search(board, depth - 1, -beta, -alpha, 1)
+                board.unmake_move(m, undo)
+
+                if val > local_best_score:
+                    local_best_score = val
+                    local_best_move = m
+                if val > alpha:
+                    alpha = val
+        except SearchStop:
+            iteration_completed = False
+
+        if not iteration_completed or NODES >= node_budget:
+            break
+
+        best_move = local_best_move
+        best_score = local_best_score
+
+        if abs(best_score) > 90000:
+            break
+
+        depth += 1
+
+    chosen_uci = to_uci(best_move)
+    if chosen_uci in legal:
+        return chosen_uci
+    if valid_legal:
+        return valid_legal[0]
+    return legal[0] if legal else None
 
 if __name__ == "__main__":
     while True:
