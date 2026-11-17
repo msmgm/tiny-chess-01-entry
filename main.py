@@ -526,6 +526,100 @@ HISTORY = [[0 for _ in range(128)] for _ in range(15)]
 
 class SearchStop(Exception): pass
 
+def qsearch(board, alpha, beta, ply):
+    global NODES
+    NODES += 1
+    if (NODES & 2047) == 0:
+        if NODES >= 600000 or (time.monotonic() - START_TIME > 9.0):
+            raise SearchStop()
+
+    if ply > 64:
+        return eval_board(board)
+
+    us = board.turn
+    them = 8 - us
+    in_check = board.attacked(board.find_king(us), them)
+
+    pseudo_moves = board.generate_moves()
+    if not pseudo_moves:
+        if in_check:
+            return -100000 + ply
+        return 0
+
+    stand_pat = eval_board(board)
+
+    if in_check:
+        best_val = -200000
+        legal_count = 0
+        scored_moves = []
+        for m in pseudo_moves:
+            score = move_score(board, m)
+            scored_moves.append((score, m))
+        scored_moves.sort(key=lambda x: x[0], reverse=True)
+
+        for score, m in scored_moves:
+            undo = board.make_move(m)
+            king_sq = board.find_king(us)
+            if king_sq != -1 and board.attacked(king_sq, them):
+                board.unmake_move(m, undo)
+                continue
+            legal_count += 1
+            val = -qsearch(board, -beta, -alpha, ply + 1)
+            board.unmake_move(m, undo)
+
+            if val > best_val:
+                best_val = val
+            if val > alpha:
+                alpha = val
+                if alpha >= beta:
+                    break
+        if legal_count == 0:
+            return -100000 + ply
+        return best_val
+    else:
+        if stand_pat >= beta:
+            return beta
+        if stand_pat > alpha:
+            alpha = stand_pat
+
+        scored_moves = []
+        for m in pseudo_moves:
+            fr, to, promo = m
+            p = board.b[fr]
+            target = board.b[to]
+            is_cap = (target != 0 or ((p & 7) == 1 and to == board.ep))
+            if not is_cap and promo == 0:
+                continue
+
+            if not promo:
+                victim = target & 7 if target else (1 if (p & 7) == 1 and to == board.ep else 0)
+                if victim and (stand_pat + MAT[victim] + 200 < alpha):
+                    continue
+
+            score = move_score(board, m)
+            scored_moves.append((score, m))
+
+        scored_moves.sort(key=lambda x: x[0], reverse=True)
+
+        for score, m in scored_moves:
+            fr, to, promo = m
+            p = board.b[fr]
+            target = board.b[to]
+            undo = board.make_move(m)
+            king_sq = board.find_king(us)
+            if king_sq != -1 and board.attacked(king_sq, them):
+                board.unmake_move(m, undo)
+                continue
+
+            val = -qsearch(board, -beta, -alpha, ply + 1)
+            board.unmake_move(m, undo)
+
+            if val > alpha:
+                alpha = val
+                if alpha >= beta:
+                    break
+        return alpha
+
 def search(board, depth, alpha, beta, ply):
     global NODES
     NODES += 1
@@ -533,10 +627,10 @@ def search(board, depth, alpha, beta, ply):
         if NODES >= 600000 or (time.monotonic() - START_TIME > 9.0):
             raise SearchStop()
 
-    if depth <= 0:
-        return eval_board(board)
     if board.halfmove >= 100:
         return 0
+    if depth <= 0:
+        return qsearch(board, alpha, beta, ply)
 
     us = board.turn
     them = 8 - us
