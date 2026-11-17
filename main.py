@@ -530,7 +530,7 @@ def qsearch(board, alpha, beta, ply):
     global NODES
     NODES += 1
     if (NODES & 2047) == 0:
-        if NODES >= 600000 or (time.monotonic() - START_TIME > 9.0):
+        if NODES >= 100000 or (time.monotonic() - START_TIME > 5.0):
             raise SearchStop()
 
     if ply > 64:
@@ -624,7 +624,7 @@ def search(board, depth, alpha, beta, ply):
     global NODES
     NODES += 1
     if (NODES & 2047) == 0:
-        if NODES >= 600000 or (time.monotonic() - START_TIME > 9.0):
+        if NODES >= 100000 or (time.monotonic() - START_TIME > 5.0):
             raise SearchStop()
 
     if board.halfmove >= 100:
@@ -806,8 +806,8 @@ def choose(fen, legal):
 
     NODES = 0
     START_TIME = time.monotonic()
-    node_budget = 600000
-    time_limit = 9.0
+    node_budget = 100000
+    time_limit = 5.0
 
     TT.clear()
     for i in range(128):
