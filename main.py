@@ -8,6 +8,26 @@ import urllib.request
 
 ENV_URL = os.environ.get("MAKEFUN_ENV_URL") or sys.exit("MAKEFUN_ENV_URL is not set")
 
+def splitmix64(state):
+    state = (state + 0x9e3779b97f4a7c15) & 0xFFFFFFFFFFFFFFFF
+    z = state
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
+    z &= 0xFFFFFFFFFFFFFFFF
+    z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+    z &= 0xFFFFFFFFFFFFFFFF
+    return state, z ^ (z >> 31)
+
+_seed = 1070372
+def _next_rand():
+    global _seed
+    _seed, val = splitmix64(_seed)
+    return val
+
+Z_PIECE = [[_next_rand() for _ in range(128)] for _ in range(15)]
+Z_TURN = _next_rand()
+Z_CASTLING = [_next_rand() for _ in range(16)]
+Z_EP = [_next_rand() for _ in range(128)]
+
 PIECES = {'P':1, 'N':2, 'B':3, 'R':4, 'Q':5, 'K':6,
           'p':9, 'n':10, 'b':11, 'r':12, 'q':13, 'k':14}
 VALUE = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9, "k": 100}
@@ -41,6 +61,21 @@ class Board:
         self.ep = name_sq(parts[3]) if len(parts) > 3 and parts[3] != '-' else -1
         self.halfmove = int(parts[4]) if len(parts) > 4 else 0
         self.fullmove = int(parts[5]) if len(parts) > 5 else 1
+        self.hash = self.compute_zobrist()
+
+    def compute_zobrist(self):
+        h = 0
+        for sq in range(128):
+            if sq & 0x88: continue
+            p = self.b[sq]
+            if p:
+                h ^= Z_PIECE[p][sq]
+        if self.turn == 8:
+            h ^= Z_TURN
+        h ^= Z_CASTLING[self.castling]
+        if self.ep != -1:
+            h ^= Z_EP[self.ep]
+        return h
 
     def attacked(self, sq, by_col):
         p_dirs = (17, 15) if by_col == 0 else (-17, -15)
@@ -172,28 +207,34 @@ class Board:
         target = self.b[to]
         us = self.turn
         them = 8 - us
-        undo = (p, target, self.castling, self.ep, self.halfmove, fr, to, promo)
-        
-        if (p & 7) == 1 or target != 0:
-            self.halfmove = 0
-        else:
-            self.halfmove += 1
-            
+        old_hash = self.hash
+        undo = (p, target, self.castling, self.ep, self.halfmove, fr, to, promo, old_hash)
+
+        self.hash ^= Z_PIECE[p][fr]
+        if target != 0:
+            self.hash ^= Z_PIECE[target][to]
+
         ep_captured_sq = -1
         if (p & 7) == 1 and to == self.ep:
             ep_captured_sq = to + (16 if us == 0 else -16)
             target = self.b[ep_captured_sq]
             self.b[ep_captured_sq] = 0
+            self.hash ^= Z_PIECE[9 | them if us == 0 else 1 | them][ep_captured_sq]
 
+        old_castling = self.castling
         if (p & 7) == 6:
             if fr == 116 and to == 118:
                 self.b[117] = self.b[119]; self.b[119] = 0
+                self.hash ^= Z_PIECE[4][119] ^ Z_PIECE[4][117]
             elif fr == 116 and to == 114:
                 self.b[115] = self.b[112]; self.b[112] = 0
+                self.hash ^= Z_PIECE[4][112] ^ Z_PIECE[4][115]
             elif fr == 4 and to == 6:
                 self.b[5] = self.b[7]; self.b[7] = 0
+                self.hash ^= Z_PIECE[12][7] ^ Z_PIECE[12][5]
             elif fr == 4 and to == 2:
                 self.b[3] = self.b[0]; self.b[0] = 0
+                self.hash ^= Z_PIECE[12][0] ^ Z_PIECE[12][3]
 
         cm = 15
         if fr == 116 or to == 116: cm &= ~3
@@ -203,19 +244,34 @@ class Board:
         if fr == 7 or to == 7: cm &= ~4
         if fr == 0 or to == 0: cm &= ~8
         self.castling &= cm
+        self.hash ^= Z_CASTLING[old_castling] ^ Z_CASTLING[self.castling]
 
+        if self.ep != -1:
+            self.hash ^= Z_EP[self.ep]
         self.ep = -1
         if (p & 7) == 1 and abs(to - fr) == 32:
             self.ep = fr + (-16 if us == 0 else 16)
+            self.hash ^= Z_EP[self.ep]
 
-        self.b[to] = (us | promo) if promo else p
+        new_p = (us | promo) if promo else p
+        self.b[to] = new_p
         self.b[fr] = 0
+        self.hash ^= Z_PIECE[new_p][to]
+
         self.turn = them
+        self.hash ^= Z_TURN
+
+        if (p & 7) == 1 or target != 0:
+            self.halfmove = 0
+        else:
+            self.halfmove += 1
+
         if us == 8: self.fullmove += 1
         return undo
 
     def unmake_move(self, move, undo):
-        p, target, castling, ep, halfmove, fr, to, promo = undo
+        p, target, castling, ep, halfmove, fr, to, promo, old_hash = undo
+        self.hash = old_hash
         us = 8 - self.turn
         them = 8 - us
         self.turn = us
@@ -388,6 +444,11 @@ def move_score(board, m):
 NODES = 0
 START_TIME = 0.0
 
+TT = {}
+EXACT, LOWER, UPPER = 0, 1, 2
+KILLERS = [[0, 0] for _ in range(128)]
+HISTORY = [[0 for _ in range(128)] for _ in range(15)]
+
 class SearchStop(Exception): pass
 
 def search(board, depth, alpha, beta, ply):
@@ -402,31 +463,166 @@ def search(board, depth, alpha, beta, ply):
     if board.halfmove >= 100:
         return 0
 
-    moves = board.legal_moves()
-    if not moves:
-        us = board.turn
-        king_sq = board.find_king(us)
-        if king_sq != -1 and board.attacked(king_sq, 8 - us):
+    us = board.turn
+    them = 8 - us
+    in_check = board.attacked(board.find_king(us), them)
+
+    # TT Probe
+    tt_entry = TT.get(board.hash)
+    tt_move = None
+    if tt_entry:
+        t_depth, t_val, t_flag, tt_move = tt_entry
+        if t_depth >= depth:
+            if t_val > 90000: t_val -= ply
+            elif t_val < -90000: t_val += ply
+            if t_flag == EXACT: return t_val
+            if t_flag == LOWER and t_val >= beta: return t_val
+            if t_flag == UPPER and t_val <= alpha: return t_val
+
+    # Null-move pruning
+    if depth >= 3 and not in_check and abs(beta) < 90000:
+        has_non_pawn = False
+        for sq in range(128):
+            if sq & 0x88: continue
+            p = board.b[sq]
+            if p and (p & 8) == us:
+                if (p & 7) not in (1, 6):
+                    has_non_pawn = True
+                    break
+        if has_non_pawn:
+            old_turn = board.turn
+            old_ep = board.ep
+            old_half = board.halfmove
+            old_hash = board.hash
+
+            board.turn = them
+            board.ep = -1
+            board.halfmove += 1
+            board.hash ^= Z_TURN
+            if old_ep != -1: board.hash ^= Z_EP[old_ep]
+
+            val = -search(board, depth - 3, -beta, -beta + 1, ply + 1)
+
+            board.turn = old_turn
+            board.ep = old_ep
+            board.halfmove = old_half
+            board.hash = old_hash
+
+            if val >= beta:
+                return beta
+
+    pseudo_moves = board.generate_moves()
+    if not pseudo_moves:
+        if in_check:
             return -100000 + ply
         return 0
 
-    moves.sort(key=lambda m: move_score(board, m), reverse=True)
+    k1 = KILLERS[ply][0] if ply < 128 else 0
+    k2 = KILLERS[ply][1] if ply < 128 else 0
+
+    scored_moves = []
+    for m in pseudo_moves:
+        fr, to, promo = m
+        p = board.b[fr]
+        pt = p & 7
+        target = board.b[to]
+        victim = target & 7 if target else (1 if pt == 1 and (fr & 7) != (to & 7) else 0)
+
+        score = 0
+        if m == tt_move:
+            score = 1000000
+        elif victim:
+            score = 200000 + (10 * MAT[victim] - MAT[pt] // 10)
+        elif m == k1:
+            score = 100000
+        elif m == k2:
+            score = 90000
+        elif target == 0 and promo == 0:
+            score = 10000 + HISTORY[p][to]
+        else:
+            score = 5000
+        scored_moves.append((score, m))
+
+    scored_moves.sort(key=lambda x: x[0], reverse=True)
 
     best_val = -200000
-    for m in moves:
+    best_move = None
+    first_move = True
+    legal_count = 0
+    alpha_orig = alpha
+
+    for score, m in scored_moves:
+        fr, to, promo = m
+        p = board.b[fr]
+        target = board.b[to]
+        is_capture = (target != 0 or ((p & 7) == 1 and to == board.ep))
+
         undo = board.make_move(m)
-        val = -search(board, depth - 1, -beta, -alpha, ply + 1)
+        king_sq = board.find_king(us)
+        if king_sq != -1 and board.attacked(king_sq, them):
+            board.unmake_move(m, undo)
+            continue
+
+        legal_count += 1
+        d_search = depth - 1
+
+        if not first_move and depth >= 3 and legal_count >= 4 and not in_check and not is_capture and promo == 0:
+            d_search = depth - 2
+            val = -search(board, d_search, -alpha - 1, -alpha, ply + 1)
+            if val > alpha:
+                d_search = depth - 1
+            else:
+                board.unmake_move(m, undo)
+                if val > best_val:
+                    best_val = val
+                    best_move = m
+                if val > alpha:
+                    alpha = val
+                continue
+
+        if first_move:
+            val = -search(board, d_search, -beta, -alpha, ply + 1)
+            first_move = False
+        else:
+            val = -search(board, d_search, -alpha - 1, -alpha, ply + 1)
+            if val > alpha and val < beta:
+                val = -search(board, depth - 1, -beta, -alpha, ply + 1)
+
         board.unmake_move(m, undo)
+
         if val > best_val:
             best_val = val
+            best_move = m
         if val > alpha:
             alpha = val
-        if alpha >= beta:
-            break
+            if alpha >= beta:
+                if not is_capture and promo == 0:
+                    if m != KILLERS[ply][0]:
+                        KILLERS[ply][1] = KILLERS[ply][0]
+                        KILLERS[ply][0] = m
+                    HISTORY[p][to] += depth * depth
+                break
+
+    if legal_count == 0:
+        if in_check:
+            return -100000 + ply
+        return 0
+
+    store_val = best_val
+    if store_val > 90000: store_val += ply
+    elif store_val < -90000: store_val -= ply
+
+    flag = EXACT
+    if best_val <= alpha_orig:
+        flag = UPPER
+    elif best_val >= beta:
+        flag = LOWER
+    TT[board.hash] = (depth, store_val, flag, best_move)
+
     return best_val
 
 def choose(fen, legal):
-    global NODES, START_TIME
+    global NODES, START_TIME, TT, KILLERS, HISTORY
     board = Board(fen)
     legals = board.legal_moves()
     if not legals:
@@ -444,6 +640,14 @@ def choose(fen, legal):
     node_budget = 600000
     time_limit = 9.0
 
+    TT.clear()
+    for i in range(128):
+        KILLERS[i][0] = 0
+        KILLERS[i][1] = 0
+    for p in range(15):
+        for sq in range(128):
+            HISTORY[p][sq] = 0
+
     best_move = legals[0]
     best_score = -200000
 
@@ -455,18 +659,45 @@ def choose(fen, legal):
         alpha = -200000
         beta = 200000
 
-        scored_moves = [(m, move_score(board, m)) for m in legals]
-        scored_moves.sort(key=lambda x: x[1], reverse=True)
-        ordered_moves = [m for m, s in scored_moves]
+        tt_entry = TT.get(board.hash)
+        tt_move = tt_entry[3] if tt_entry else None
+
+        scored_moves = []
+        for m in legals:
+            fr, to, promo = m
+            p = board.b[fr]
+            pt = p & 7
+            target = board.b[to]
+            victim = target & 7 if target else (1 if pt == 1 and (fr & 7) != (to & 7) else 0)
+            score = 0
+            if m == tt_move:
+                score = 1000000
+            elif victim:
+                score = 200000 + (10 * MAT[victim] - MAT[pt] // 10)
+            else:
+                score = 5000
+            scored_moves.append((score, m))
+
+        scored_moves.sort(key=lambda x: x[0], reverse=True)
+        ordered_moves = [m for score, m in scored_moves]
 
         local_best_move = ordered_moves[0]
         local_best_score = -200000
 
         iteration_completed = True
+        first_move = True
         try:
             for m in ordered_moves:
                 undo = board.make_move(m)
-                val = -search(board, depth - 1, -beta, -alpha, 1)
+                d_search = depth - 1
+                if first_move:
+                    val = -search(board, d_search, -beta, -alpha, 1)
+                    first_move = False
+                else:
+                    val = -search(board, d_search, -alpha - 1, -alpha, 1)
+                    if val > alpha and val < beta:
+                        val = -search(board, depth - 1, -beta, -alpha, 1)
+
                 board.unmake_move(m, undo)
 
                 if val > local_best_score:
