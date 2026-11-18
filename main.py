@@ -2,9 +2,17 @@
 import sys
 b=[0]*128;t=0;c=0;e=-1;h=0;U=[]
 P={'P':1,'N':2,'B':3,'R':4,'Q':5,'K':6,'p':9,'n':10,'b':11,'r':12,'q':13,'k':14}
+_s=1070372
+def _nr():
+    global _s;_s=(_s+0x9E3779B97F4A7C15)&0xFFFFFFFFFFFFFFFF
+    z=(_s^(_s>>30))*0xBF58476D1CE4E5B9&0xFFFFFFFFFFFFFFFF
+    return (z^(z>>27))*0x94D049BB133111EB&0xFFFFFFFFFFFFFFFF
+ZP=[[_nr() for _ in range(128)] for _ in range(15)]
+ZT=_nr();ZC=[_nr() for _ in range(16)];ZE=[_nr() for _ in range(128)]
+K=0;TT={};KL=[0]*256;H=[0]*2048;PH=set();GH=set();NPM=[0,0];EXACT,LOWER,UPPER=0,1,2
+
 def setup(fen):
-    global b,t,c,e,h
-    b=[0]*128;U.clear()
+    global b,t,c,e,h,K,NPM;b=[0]*128;U.clear()
     p=fen.split()
     for r,row in enumerate(p[0].split('/')):
         col=0
@@ -15,6 +23,10 @@ def setup(fen):
     c=sum(v for ch,v in (('K',1),('Q',2),('k',4),('q',8)) if len(p)>2 and ch in p[2])
     e=((8-int(p[3][1]))<<4)+(ord(p[3][0])-97) if len(p)>3 and p[3]!='-' else -1
     h=int(p[4]) if len(p)>4 else 0
+    K=(ZT if t==8 else 0)^ZC[c]^(ZE[e] if e!=-1 else 0)
+    for q in range(128):K^=ZP[b[q]][q]*(b[q] and not(q&0x88))
+    NPM=[sum(MAT[b[q]&7] for q in range(128) if not(q&0x88) and b[q] and (b[q]&8)==0 and (b[q]&7) not in (1,6)),
+         sum(MAT[b[q]&7] for q in range(128) if not(q&0x88) and b[q] and (b[q]&8)==8 and (b[q]&7) not in (1,6))]
 def sq(s):return chr(97+(s&7))+str(8-(s>>4))
 def to_uci(m):
     fr=m&127;to=(m>>7)&127;pr=(m>>14)&7
@@ -90,17 +102,20 @@ def gen():
                     to+=d
     return mvs
 def mk(m):
-    global t,c,e,h
-    fr=m&127;to=(m>>7)&127;pr=m>>14;p=b[fr];tgt=b[to];us=t;them=8-us;oc=c;oe=e;oh=h
-    U.append((p,tgt,oc,oe,oh,fr,to,pr))
+    global t,c,e,h,K,NPM
+    fr=m&127;to=(m>>7)&127;pr=m>>14;p=b[fr];tgt=b[to];us=t;them=8-us;oc=c;oe=e;oh=h;ok=K;on0,on1=NPM[0],NPM[1]
+    U.append((p,tgt,oc,oe,oh,ok,on0,on1,fr,to,pr))
+    K^=ZP[p][fr]
+    if tgt:
+        K^=ZP[tgt][to]
+        if (tgt&7) not in (1,6): NPM[them>>3]-=MAT[tgt&7]
     if (p&7)==1 and to==e:
-        es=to+(16 if us==0 else -16)
-        tgt=b[es];b[es]=0
+        es=to+(16 if us==0 else -16);ep_p=b[es];b[es]=0;K^=ZP[ep_p][es];NPM[them>>3]-=100
     if (p&7)==6:
-        if fr==116 and to==118: b[117],b[119]=b[119],0
-        elif fr==116 and to==114: b[115],b[112]=b[112],0
-        elif fr==4 and to==6: b[5],b[7]=b[7],0
-        elif fr==4 and to==2: b[3],b[0]=b[0],0
+        if fr==116 and to==118: b[117],b[119]=b[119],0;K^=ZP[4][119]^ZP[4][117]
+        elif fr==116 and to==114: b[115],b[112]=b[112],0;K^=ZP[4][112]^ZP[4][115]
+        elif fr==4 and to==6: b[5],b[7]=b[7],0;K^=ZP[12][7]^ZP[12][5]
+        elif fr==4 and to==2: b[3],b[0]=b[0],0;K^=ZP[12][0]^ZP[12][3]
     cm=15
     if fr==116 or to==116: cm&=~3
     if fr==119 or to==119: cm&=~1
@@ -108,19 +123,21 @@ def mk(m):
     if fr==4 or to==4: cm&=~12
     if fr==7 or to==7: cm&=~4
     if fr==0 or to==0: cm&=~8
-    c&=cm;e=-1
-    if (p&7)==1 and abs(to-fr)==32: e=fr+(-16 if us==0 else 16)
+    c&=cm;K^=ZC[oc]^ZC[c]
+    if oe!=-1: K^=ZE[oe]
+    e=-1
+    if (p&7)==1 and abs(to-fr)==32: e=fr+(-16 if us==0 else 16);K^=ZE[e]
     np_=(us|pr) if pr else p
-    b[to]=np_;b[fr]=0;t=them;h=0 if (p&7)==1 or tgt else h+1
+    b[to]=np_;b[fr]=0;K^=ZP[np_][to]^ZT;t=them;h=0 if (p&7)==1 or tgt else h+1
+    if pr and (p&7)==1: NPM[us>>3]+=MAT[pr]-100
     return U[-1]
 def un():
-    global t,c,e,h
-    p,tgt,oc,oe,oh,fr,to,pr=U.pop()
-    us=8-t;t=us;c=oc;e=oe;h=oh
-    np_=b[to];b[fr]=p
+    global t,c,e,h,K,NPM
+    p,tgt,oc,oe,oh,ok,on0,on1,fr,to,pr=U.pop()
+    us=8-t;t=us;c=oc;e=oe;h=oh;K=ok;NPM[0],NPM[1]=on0,on1
+    b[fr]=p
     if (p&7)==1 and to==oe:
-        es=to+(16 if us==0 else -16)
-        b[to]=0;b[es]=9 if us==0 else 1
+        es=to+(16 if us==0 else -16);b[to]=0;b[es]=9 if us==0 else 1
     else: b[to]=tgt
     if (p&7)==6:
         if fr==116 and to==118: b[119],b[117]=b[117],0
@@ -163,35 +180,83 @@ def eval():
     w=(w1*ph+w2*(24-ph))//24;x=(b1*ph+b2*(24-ph))//24
     return (w-x) if t==0 else (x-w)
 
-def move_score(m):
+def move_score(m,ttm=0,ply=0):
+    if m==ttm: return 1000000
     fr=m&127;to=(m>>7)&127;pr=m>>14
     p=b[fr];pt=p&7;tgt=b[to]
     vic=(tgt&7) if tgt else (1 if pt==1 and (fr&7)!=(to&7) else 0)
-    return (20000+10*MAT[vic]-MAT[pt]//10) if vic else (10000+1000*pr if pr else 0)
+    if vic: return 200000+10*MAT[vic]-MAT[pt]//10
+    if ply<128 and (m==KL[ply*2] or m==KL[ply*2+1]): return 90000
+    if not pr: return 10000+H[((p&15)<<7)|to]
+    return 5000+1000*pr
 
 class SearchStop(Exception): pass
 NODES=0;START_TIME=0.0
 
-def search(depth,alpha,beta,ply):
-    global NODES
-    NODES+=1
+def qsearch(alpha,beta,ply):
+    global NODES;NODES+=1
     if (NODES&2047)==0 and (NODES>=100000 or time.monotonic()-START_TIME>5.0): raise SearchStop()
-    if h>=100: return 0
-    if depth<=0: return eval()
+    if ply>64: return eval()
     us=t;them=8-us;in_check=atk(fk(us),them)
-    if depth>=3 and not in_check and abs(beta)<90000:
-        if any((p:=b[sq]) and (p&8)==us and (p&7) not in (1,6) for sq in range(128) if not(sq&0x88)):
-            ot,oe,oh=t,e,h;globals()['t']=them;globals()['e']=-1;globals()['h']=oh+1
-            val=-search(depth-3,-beta,-beta+1,ply+1)
-            globals()['t']=ot;globals()['e']=oe;globals()['h']=oh
-            if val>=beta: return beta
     mvs=legal()
     if not mvs: return (-100000+ply) if in_check else 0
-    mvs.sort(key=move_score,reverse=True)
-    bv=-200000;fm=True;lc=0
+    sp=eval()
+    if in_check:
+        bv=-200000
+        mvs.sort(key=lambda m:move_score(m),reverse=True)
+        for m in mvs:
+            mk(m);val=-qsearch(-beta,-alpha,ply+1);un()
+            if val>bv: bv=val
+            if val>alpha:
+                alpha=val
+                if alpha>=beta: break
+        return bv
+    else:
+        if sp>=beta: return beta
+        if sp>alpha: alpha=sp
+        sc=[]
+        for m in mvs:
+            fr=m&127;to=(m>>7)&127;pr=m>>14;p=b[fr];tgt=b[to]
+            if tgt!=0 or ((p&7)==1 and to==e) or pr!=0:
+                if not pr:
+                    vic=(tgt&7) if tgt else (1 if (p&7)==1 and to==e else 0)
+                    if vic and (sp+MAT[vic]+200<alpha): continue
+                sc.append(m)
+        sc.sort(key=lambda m:move_score(m),reverse=True)
+        for m in sc:
+            mk(m);val=-qsearch(-beta,-alpha,ply+1);un()
+            if val>alpha:
+                alpha=val
+                if alpha>=beta: break
+        return alpha
+
+def search(depth,alpha,beta,ply):
+    global NODES;NODES+=1
+    if (NODES&2047)==0 and (NODES>=100000 or time.monotonic()-START_TIME>5.0): raise SearchStop()
+    if h>=100 or K in GH or K in PH: return 0
+    if depth<=0: return qsearch(alpha,beta,ply)
+    us=t;them=8-us;in_check=atk(fk(us),them)
+    te=TT.get(K);ttm=None
+    if te and te[0]>=depth:
+        td,tv,tf,ttm=te
+        tv=tv-ply if tv>90000 else (tv+ply if tv<-90000 else tv)
+        if tf==EXACT or (tf==LOWER and tv>=beta) or (tf==UPPER and tv<=alpha): return tv
+    if depth>=3 and not in_check and abs(beta)<90000 and NPM[us>>3]:
+        ot,oe,ohf,ok,on0,on1=t,e,h,K,NPM[0],NPM[1]
+        globals()['t']=them;globals()['e']=-1;globals()['h']=ohf+1;globals()['K']=ok^ZT^(ZE[oe] if oe!=-1 else 0)
+        val=-search(depth-3,-beta,-beta+1,ply+1)
+        globals()['t']=ot;globals()['e']=oe;globals()['h']=ohf;globals()['K']=ok
+        globals()['NPM'][0],globals()['NPM'][1]=on0,on1
+        if val>=beta: return beta
+    PH.add(K)
+    mvs=legal()
+    if not mvs:
+        PH.remove(K)
+        return (-100000+ply) if in_check else 0
+    mvs.sort(key=lambda m:move_score(m,ttm,ply),reverse=True)
+    bv=-200000;bm=None;fm=True;lc=0;ao=alpha
     for m in mvs:
-        fr=m&127;to=(m>>7)&127;pr=m>>14
-        p=b[fr];tgt=b[to];ic=tgt!=0 or ((p&7)==1 and to==e)
+        fr=m&127;to=(m>>7)&127;pr=m>>14;p=b[fr];tgt=b[to];ic=tgt!=0 or ((p&7)==1 and to==e)
         mk(m);lc+=1;ds=depth-1
         if not fm and depth>=3 and lc>=4 and not in_check and not ic and not pr:
             ds=depth-2
@@ -199,7 +264,7 @@ def search(depth,alpha,beta,ply):
             if val>alpha: ds=depth-1
             else:
                 un()
-                if val>bv: bv=val
+                if val>bv: bv,bm=val,m
                 if val>alpha: alpha=val
                 continue
         if fm:
@@ -210,20 +275,30 @@ def search(depth,alpha,beta,ply):
             if val>alpha and val<beta:
                 val=-search(depth-1,-beta,-alpha,ply+1)
         un()
-        if val>bv: bv=val
+        if val>bv: bv,bm=val,m
         if val>alpha:
             alpha=val
-            if alpha>=beta: break
+            if alpha>=beta:
+                if not ic and not pr and ply<128:
+                    if m!=KL[ply*2]: KL[ply*2+1],KL[ply*2]=KL[ply*2],m
+                    H[((p&15)<<7)|to]+=depth*depth
+                break
+    PH.remove(K)
+    sv=bv+ply if bv>90000 else (bv-ply if bv<-90000 else bv)
+    TT[K]=(depth,sv,UPPER if bv<=ao else (LOWER if bv>=beta else EXACT),bm)
     return bv
 
-def choose(fen,lm):
-    global NODES,START_TIME;setup(fen);legals=legal()
+def choose(fen,lm,gh=None):
+    global NODES,START_TIME,GH,TT,KL,H,PH;GH=gh or set();setup(fen);legals=legal()
     if not legals: return lm[0] if lm else None
     if len(legals)==1: return to_uci(legals[0])
     ul=[to_uci(m) for m in legals];vl=[m for m in lm if m in ul] or lm
-    NODES=0;START_TIME=time.monotonic();bm=legals[0];depth=1
+    NODES=0;START_TIME=time.monotonic();TT.clear();KL=[0]*256;H=[0]*2048;PH.clear()
+    bm=legals[0];depth=1
     while NODES<100000 and time.monotonic()-START_TIME<5.0:
-        alpha,beta=-200000,200000;mvs=legals[:];mvs.sort(key=move_score,reverse=True)
+        alpha,beta=-200000,200000
+        ttm=(te:=TT.get(K)) and te[3]
+        mvs=legals[:];mvs.sort(key=lambda m:move_score(m,ttm,1),reverse=True)
         lbm=mvs[0];lbs=-200000;comp=True;fm=True
         try:
             for m in mvs:
@@ -232,7 +307,8 @@ def choose(fen,lm):
                     val=-search(ds,-beta,-alpha,1);fm=False
                 else:
                     val=-search(ds,-alpha-1,-alpha,1)
-                    if val>alpha and val<beta: val=-search(depth-1,-beta,-alpha,1)
+                    if val>alpha and val<beta:
+                        val=-search(depth-1,-beta,-alpha,1)
                 un()
                 if val>lbs: lbs,lbm=val,m
                 if val>alpha: alpha=val
@@ -256,6 +332,10 @@ if __name__=="__main__":
         g=post("/game",{})
         if g["status"]=="done": break
         while g["status"]=="your_move":
-            g=post("/move",{"game":g["game"],"move":choose(g["fen"],g["legal_moves"])})
+            setup(g.get("start_fen","rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"))
+            gh=set()
+            for uci in g.get("moves",[]):
+                gh.add(K);mk(from_uci(uci))
+            g=post("/move",{"game":g["game"],"move":choose(g["fen"],g["legal_moves"],gh)})
         print(f"game {g['game']}: {g['outcome']} by {g['reason']}",file=sys.stderr)
     print(f"done: {g.get('wins')} won, {g.get('draws')} drawn, {g.get('losses')} lost",file=sys.stderr)
