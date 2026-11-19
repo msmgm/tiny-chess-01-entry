@@ -9,10 +9,10 @@ def _nr():
     return (z^(z>>27))*0x94D049BB133111EB&0xFFFFFFFFFFFFFFFF
 ZP=[[_nr() for _ in range(128)] for _ in range(15)]
 ZT=_nr();ZC=[_nr() for _ in range(16)];ZE=[_nr() for _ in range(128)]
-K=0;TT={};KL=[0]*256;H=[0]*2048;PH=set();GH=set();NPM=[0,0];EXACT,LOWER,UPPER=0,1,2
+K=0;WK=0;BK=0;TT={};KL=[0]*256;H=[0]*2048;PH=set();GH=set();NPM=[0,0];EXACT,LOWER,UPPER=0,1,2
 
 def setup(fen):
-    global b,t,c,e,h,K,NPM;b=[0]*128;U.clear()
+    global b,t,c,e,h,K,NPM,WK,BK;b=[0]*128;U.clear()
     p=fen.split()
     for r,row in enumerate(p[0].split('/')):
         col=0
@@ -24,7 +24,12 @@ def setup(fen):
     e=((8-int(p[3][1]))<<4)+(ord(p[3][0])-97) if len(p)>3 and p[3]!='-' else -1
     h=int(p[4]) if len(p)>4 else 0
     K=(ZT if t==8 else 0)^ZC[c]^(ZE[e] if e!=-1 else 0)
-    for q in range(128):K^=ZP[b[q]][q]*(b[q] and not(q&0x88))
+    WK=BK=0
+    for q in range(128):
+        if not(q&0x88) and (p_:=b[q]):
+            K^=ZP[p_][q]
+            if p_==6: WK=q
+            elif p_==14: BK=q
     NPM=[sum(MAT[b[q]&7] for q in range(128) if not(q&0x88) and b[q] and (b[q]&8)==0 and (b[q]&7) not in (1,6)),
          sum(MAT[b[q]&7] for q in range(128) if not(q&0x88) and b[q] and (b[q]&8)==8 and (b[q]&7) not in (1,6))]
 def sq(s):return chr(97+(s&7))+str(8-(s>>4))
@@ -58,7 +63,7 @@ def atk(s,by):
                 break
             t+=d
     return 0
-def gen():
+def gen(cp=0):
     mvs=[];us=t;them=8-us;fwd=-16 if us==0 else 16;sr=6 if us==0 else 1;pr=0 if us==0 else 7
     cd=(-17,-15) if us==0 else (15,17)
     for sq in range(128):
@@ -69,7 +74,7 @@ def gen():
             if not(to&0x88) and not b[to]:
                 if (to>>4)==pr:
                     for promo in (5,4,3,2): mvs.append(sq|(to<<7)|(promo<<14))
-                else:
+                elif not cp:
                     mvs.append(sq|(to<<7))
                     to2=to+fwd
                     if (sq>>4)==sr and not(to2&0x88) and not b[to2]: mvs.append(sq|(to2<<7))
@@ -78,13 +83,12 @@ def gen():
                 if not(to&0x88) and (((tgt:=b[to]) and (tgt&8)==them) or to==e):
                     if (to>>4)==pr:
                         for promo in (5,4,3,2): mvs.append(sq|(to<<7)|(promo<<14))
-                    else:
-                        mvs.append(sq|(to<<7))
+                    else: mvs.append(sq|(to<<7))
         elif pt in (2,6):
             for d in ((-18,-33,-31,-14,14,31,33,18) if pt==2 else (-17,-16,-15,-1,1,15,16,17)):
-                if not((to:=sq+d)&0x88) and (not(tgt:=b[to]) or (tgt&8)==them):
+                if not((to:=sq+d)&0x88) and ((not cp and not(tgt:=b[to])) or ((tgt:=b[to]) and (tgt&8)==them)):
                     mvs.append(sq|(to<<7))
-            if pt==6:
+            if pt==6 and not cp:
                 if us==0:
                     if (c&1) and not b[117] and not b[118] and not atk(116,8) and not atk(117,8) and not atk(118,8): mvs.append(116|(118<<7))
                     if (c&2) and not b[115] and not b[114] and not b[113] and not atk(116,8) and not atk(115,8) and not atk(114,8): mvs.append(116|(114<<7))
@@ -95,17 +99,21 @@ def gen():
             for d in (((-17,-15,15,17) if pt in (3,5) else())+((-1,-16,16,1) if pt in (4,5) else())):
                 to=sq+d
                 while not(to&0x88):
-                    if not(tgt:=b[to]): mvs.append(sq|(to<<7))
+                    if not(tgt:=b[to]):
+                        if not cp: mvs.append(sq|(to<<7))
                     else:
                         if (tgt&8)==them: mvs.append(sq|(to<<7))
                         break
                     to+=d
     return mvs
 def mk(m):
-    global t,c,e,h,K,NPM
-    fr=m&127;to=(m>>7)&127;pr=m>>14;p=b[fr];tgt=b[to];us=t;them=8-us;oc=c;oe=e;oh=h;ok=K;on0,on1=NPM[0],NPM[1]
-    U.append((p,tgt,oc,oe,oh,ok,on0,on1,fr,to,pr))
+    global t,c,e,h,K,NPM,WK,BK
+    fr=m&127;to=(m>>7)&127;pr=m>>14;p=b[fr];tgt=b[to];us=t;them=8-us;oc=c;oe=e;oh=h;ok=K;on0,on1=NPM[0],NPM[1];owk,obk=WK,BK
+    U.append((p,tgt,oc,oe,oh,ok,on0,on1,owk,obk,fr,to,pr))
     K^=ZP[p][fr]
+    if (p&7)==6:
+        if us==0: WK=to
+        else: BK=to
     if tgt:
         K^=ZP[tgt][to]
         if (tgt&7) not in (1,6): NPM[them>>3]-=MAT[tgt&7]
@@ -132,9 +140,9 @@ def mk(m):
     if pr and (p&7)==1: NPM[us>>3]+=MAT[pr]-100
     return U[-1]
 def un():
-    global t,c,e,h,K,NPM
-    p,tgt,oc,oe,oh,ok,on0,on1,fr,to,pr=U.pop()
-    us=8-t;t=us;c=oc;e=oe;h=oh;K=ok;NPM[0],NPM[1]=on0,on1
+    global t,c,e,h,K,NPM,WK,BK
+    p,tgt,oc,oe,oh,ok,on0,on1,owk,obk,fr,to,pr=U.pop()
+    us=8-t;t=us;c=oc;e=oe;h=oh;K=ok;NPM[0],NPM[1]=on0,on1;WK,BK=owk,obk
     b[fr]=p
     if (p&7)==1 and to==oe:
         es=to+(16 if us==0 else -16);b[to]=0;b[es]=9 if us==0 else 1
@@ -144,14 +152,11 @@ def un():
         elif fr==116 and to==114: b[112],b[115]=b[115],0
         elif fr==4 and to==6: b[7],b[5]=b[5],0
         elif fr==4 and to==2: b[0],b[3]=b[3],0
-def fk(c):
-    for i in range(128):
-        if not(i&0x88) and b[i]==(6|c): return i
-def legal():
+def legal(cp=0):
     l=[];us=t;them=8-us
-    for m in gen():
+    for m in gen(cp):
         mk(m)
-        if not atk(fk(us),them): l.append(m)
+        if not atk([WK,BK][us>>3],them): l.append(m)
         un()
     return l
 import json, os, time, urllib.request
@@ -189,11 +194,10 @@ def qsearch(alpha,beta,ply):
     global NODES;NODES+=1
     if (NODES&2047)==0 and (NODES>=100000 or time.monotonic()-START_TIME>5.0): raise SearchStop()
     if ply>64: return eval()
-    us=t;them=8-us;in_check=atk(fk(us),them)
-    mvs=legal()
-    if not mvs: return (-100000+ply) if in_check else 0
-    sp=eval()
+    us=t;them=8-us;in_check=atk([WK,BK][us>>3],them)
     if in_check:
+        mvs=legal()
+        if not mvs: return (-100000+ply)
         bv=-200000
         mvs.sort(key=lambda m:move_score(m),reverse=True)
         for m in mvs:
@@ -204,16 +208,18 @@ def qsearch(alpha,beta,ply):
                 if alpha>=beta: break
         return bv
     else:
+        sp=eval()
         if sp>=beta: return beta
         if sp>alpha: alpha=sp
         sc=[]
-        for m in mvs:
+        caps=legal(1)
+        if not caps and not legal(): return 0
+        for m in caps:
             fr=m&127;to=(m>>7)&127;pr=m>>14;p=b[fr];tgt=b[to]
-            if tgt!=0 or ((p&7)==1 and to==e) or pr!=0:
-                if not pr:
-                    vic=(tgt&7) if tgt else (1 if (p&7)==1 and to==e else 0)
-                    if vic and (sp+MAT[vic]+200<alpha): continue
-                sc.append(m)
+            if not pr:
+                vic=(tgt&7) if tgt else (1 if (p&7)==1 and to==e else 0)
+                if vic and (sp+MAT[vic]+200<alpha): continue
+            sc.append(m)
         sc.sort(key=lambda m:move_score(m),reverse=True)
         for m in sc:
             mk(m);val=-qsearch(-beta,-alpha,ply+1);un()
@@ -227,7 +233,7 @@ def search(depth,alpha,beta,ply):
     if (NODES&2047)==0 and (NODES>=100000 or time.monotonic()-START_TIME>5.0): raise SearchStop()
     if h>=100 or K in GH or K in PH: return 0
     if depth<=0: return qsearch(alpha,beta,ply)
-    us=t;them=8-us;in_check=atk(fk(us),them)
+    us=t;them=8-us;in_check=atk([WK,BK][us>>3],them)
     te=TT.get(K);ttm=None
     if te and te[0]>=depth:
         td,tv,tf,ttm=te
