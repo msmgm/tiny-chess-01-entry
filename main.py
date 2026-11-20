@@ -1,6 +1,7 @@
 import json,os,sys,time,urllib.request
 b=[0]*128;t=0;c=0;e=-1;h=0;U=[];W=0;B=0;N=[0,0]
 P={'P':1,'N':2,'B':3,'R':4,'Q':5,'K':6,'p':9,'n':10,'b':11,'r':12,'q':13,'k':14}
+TT={};KL=[0]*256;H=[0]*2048;PH=set();GH=set();EXACT,LOWER,UPPER=0,1,2
 _s=1070372
 def _nr():
     global _s;_s=(_s+0x9E3779B97F4A7C15)&0xFFFFFFFFFFFFFFFF
@@ -163,10 +164,14 @@ def eval():
     ph=24 if ph>24 else ph
     w=(w1*ph+w2*(24-ph))//24;x=(b1*ph+b2*(24-ph))//24
     return (w-x) if t==0 else (x-w)
-def move_score(m):
+def move_score(m,ttm=0,ply=0):
+    if m==ttm: return 1000000
     fr=m&127;to=(m>>7)&127;pr=m>>14;p=b[fr];pt=p&7;tgt=b[to]
     vic=(tgt&7) if tgt else (1 if pt==1 and (fr&7)!=(to&7) else 0)
-    return (200000+10*M[vic]-M[pt]//10) if vic else (5000+1000*pr if pr else 0)
+    if vic: return 200000+10*M[vic]-M[pt]//10
+    if ply<128 and (m==KL[ply*2] or m==KL[ply*2+1]): return 90000
+    if not pr: return 10000+H[((p&15)<<7)|to]
+    return 5000+1000*pr
 class SearchStop(Exception): pass
 NODES=0;START_TIME=0.0
 def qsearch(alpha,beta,ply):
@@ -176,8 +181,8 @@ def qsearch(alpha,beta,ply):
     us=t;them=8-us;in_check=atk(W if us==0 else B,them)
     if in_check:
         mvs=gen()
-        mvs.sort(key=move_score,reverse=True)
         bv=-200000;lc=0
+        mvs.sort(key=lambda m:move_score(m,0,ply),reverse=True)
         for m in mvs:
             mk(m)
             if atk(W if us==0 else B,them): un();continue
@@ -195,14 +200,15 @@ def qsearch(alpha,beta,ply):
         mvs=gen(cp=1)
         vm=[]
         for m in mvs:
+            fr=m&127;to=(m>>7)&127;pr=m>>14;p=b[fr];tgt=b[to]
             mk(m)
             if atk(W if us==0 else B,them): un();continue
-            fr=m&127;to=(m>>7)&127;pr=m>>14;p=b[fr];tgt=b[to];un()
+            un()
             if not pr:
                 vic=(tgt&7) if tgt else (1 if (p&7)==1 and to==e else 0)
                 if vic and (sp+M[vic]+200<alpha): continue
             vm.append(m)
-        vm.sort(key=move_score,reverse=True)
+        vm.sort(key=lambda m:move_score(m,0,ply),reverse=True)
         for m in vm:
             mk(m)
             val=-qsearch(-beta,-alpha,ply+1);un()
@@ -213,16 +219,38 @@ def qsearch(alpha,beta,ply):
 def search(depth,alpha,beta,ply):
     global NODES,t,e,h,K;NODES+=1
     if (NODES&2047)==0 and (NODES>=100000 or time.monotonic()-START_TIME>5.0): raise SearchStop()
-    if h>=100: return 0
+    if h>=100 or K in GH or K in PH: return 0
     if depth<=0: return qsearch(alpha,beta,ply)
     us=t;them=8-us;in_check=atk(W if us==0 else B,them)
-    mvs=gen();mvs.sort(key=move_score,reverse=True)
-    bv=-200000;bm=None;fm=True;lc=0
+    te=TT.get(K);ttm=None
+    if te and te[0]>=depth:
+        td,tv,tf,ttm=te
+        tv=tv-ply if tv>90000 else (tv+ply if tv<-90000 else tv)
+        if tf==EXACT or (tf==LOWER and tv>=beta) or (tf==UPPER and tv<=alpha): return tv
+    if depth>=3 and not in_check and abs(beta)<90000 and N[us>>3]:
+        ot,oe,ohf,ok,on0,on1=t,e,h,K,N[0],N[1]
+        t,e,h,K=them,-1,ohf+1,ok^ZT^(ZE[oe] if oe!=-1 else 0)
+        val=-search(depth-3,-beta,-beta+1,ply+1)
+        t,e,h,K=ot,oe,ohf,ok;N[0],N[1]=on0,on1
+        if val>=beta: return beta
+    PH.add(K)
+    mvs=gen()
+    mvs.sort(key=lambda m:move_score(m,ttm,ply),reverse=True)
+    bv=-200000;bm=None;fm=True;lc=0;ao=alpha
     for m in mvs:
+        fr=m&127;to=(m>>7)&127;pr=m>>14;p=b[fr];tgt=b[to];ic=tgt!=0 or ((p&7)==1 and to==e)
         mk(m)
         if atk(W if us==0 else B,them): un();continue
-        lc+=1
-        ds=depth-1
+        lc+=1;ds=depth-1
+        if not fm and depth>=3 and lc>=4 and not in_check and not ic and not pr:
+            ds=depth-2
+            val=-search(ds,-alpha-1,-alpha,ply+1)
+            if val>alpha: ds=depth-1
+            else:
+                un()
+                if val>bv: bv,bm=val,m
+                if val>alpha: alpha=val
+                continue
         if fm:
             val=-search(ds,-beta,-alpha,ply+1)
             fm=False
@@ -234,11 +262,18 @@ def search(depth,alpha,beta,ply):
         if val>bv: bv,bm=val,m
         if val>alpha:
             alpha=val
-            if alpha>=beta: break
+            if alpha>=beta:
+                if not ic and not pr and ply<128:
+                    if m!=KL[ply*2]: KL[ply*2+1],KL[ply*2]=KL[ply*2],m
+                    H[((p&15)<<7)|to]+=depth*depth
+                break
+    PH.remove(K)
     if lc==0: return (-100000+ply) if in_check else 0
+    sv=bv+ply if bv>90000 else (bv-ply if bv<-90000 else bv)
+    TT[K]=(depth,sv,UPPER if bv<=ao else (LOWER if bv>=beta else EXACT),bm)
     return bv
 def choose(fen,lm,gh=None):
-    global NODES,START_TIME;setup(fen)
+    global NODES,START_TIME,GH,TT,KL,H,PH;GH=gh or set();setup(fen);TT.clear();KL=[0]*256;H=[0]*2048;PH.clear()
     legals=[]
     for m in gen():
         mk(m)
@@ -251,13 +286,24 @@ def choose(fen,lm,gh=None):
     bm=legals[0];depth=1
     while NODES<100000 and time.monotonic()-START_TIME<5.0:
         alpha,beta=-200000,200000
-        mvs=legals[:];mvs.sort(key=move_score,reverse=True)
+        te=TT.get(K);ttm=te[3] if te else 0
+        mvs=legals[:];mvs.sort(key=lambda m:move_score(m,ttm,1),reverse=True)
         lbm=mvs[0];lbs=-200000;comp=True;fm=True
         try:
             for m in mvs:
+                fr=m&127;to=(m>>7)&127;pr=m>>14;p=b[fr];tgt=b[to];ic=tgt!=0 or ((p&7)==1 and to==e)
                 mk(m)
                 if atk(W if t==8 else B,t): un();continue
                 ds=depth-1
+                if not fm and depth>=3 and not ic and not pr:
+                    ds=depth-2
+                    val=-search(ds,-alpha-1,-alpha,1)
+                    if val>alpha: ds=depth-1
+                    else:
+                        un()
+                        if val>lbs: lbs,lbm=val,m
+                        if val>alpha: alpha=val
+                        continue
                 if fm:
                     val=-search(ds,-beta,-alpha,1);fm=False
                 else:
